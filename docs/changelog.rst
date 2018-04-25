@@ -5,6 +5,7 @@ Version 1.4.3
 -------------
 
 * Fix `#442`_.
+* remove shitcoins
 
 Version 1.4.2
 -------------
