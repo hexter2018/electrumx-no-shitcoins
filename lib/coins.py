@@ -39,7 +39,7 @@ from functools import partial
 import base64
 
 import lib.util as util
-from lib.hash import Base58, hash160, double_sha256, hash_to_str
+from lib.hash import Base58, hash160, double_sha256, hash_to_str, HASHX_LEN
 from lib.script import ScriptPubKey, OpCodes
 import lib.tx as lib_tx
 from server.block_processor import BlockProcessor
@@ -60,10 +60,9 @@ class Coin(object):
 
     REORG_LIMIT = 200
     # Not sure if these are coin-specific
-    RPC_URL_REGEX = re.compile('.+@(\[[0-9a-fA-F:]+\]|[^:]+)(:[0-9]+)?')
+    RPC_URL_REGEX = re.compile('.+@(\\[[0-9a-fA-F:]+\\]|[^:]+)(:[0-9]+)?')
     VALUE_PER_COIN = 100000000
     CHUNK_SIZE = 2016
-    HASHX_LEN = 11
     BASIC_HEADER_SIZE = 80
     STATIC_BLOCK_HEADERS = True
     SESSIONCLS = ElectrumX
@@ -135,7 +134,7 @@ class Coin(object):
         '''
         if script and script[0] == OP_RETURN:
             return None
-        return sha256(script).digest()[:cls.HASHX_LEN]
+        return sha256(script).digest()[:HASHX_LEN]
 
     @util.cachedproperty
     def address_handlers(cls):
@@ -261,8 +260,8 @@ class Coin(object):
     @classmethod
     def static_header_len(cls, height):
         '''Given a header height return its length.'''
-        return cls.static_header_offset(height + 1) \
-               - cls.static_header_offset(height)
+        return (cls.static_header_offset(height + 1)
+                - cls.static_header_offset(height))
 
     @classmethod
     def block_header(cls, block, height):
@@ -319,7 +318,7 @@ class AuxPowMixin(object):
 
 class EquihashMixin(object):
     STATIC_BLOCK_HEADERS = False
-    BASIC_HEADER_SIZE = 140 # Excluding Equihash solution
+    BASIC_HEADER_SIZE = 140  # Excluding Equihash solution
     DESERIALIZER = lib_tx.DeserializerEquihash
 
     @classmethod
@@ -541,6 +540,19 @@ class Zcash(EquihashMixin, Coin):
     TX_PER_BLOCK = 5
     RPC_PORT = 8232
     REORG_LIMIT = 800
+
+class ZcashTestnet(Zcash):
+    SHORTNAME = "TAZ"
+    NET = "testnet"
+    P2PKH_VERBYTE = bytes.fromhex("1D25")
+    P2SH_VERBYTES = [bytes.fromhex("1CBA")]
+    WIF_BYTE = bytes.fromhex("EF")
+    GENESIS_HASH = ('05a60a92d99d85997cce3b87616c089f'
+                    '6124d7342af37106edc76126334a2c38')
+    TX_COUNT = 242312
+    TX_COUNT_HEIGHT = 321685
+    TX_PER_BLOCK = 2
+    RPC_PORT = 18232
 
 
 # Vertcoin
