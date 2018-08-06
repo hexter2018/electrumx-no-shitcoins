@@ -38,13 +38,14 @@ from hashlib import sha256
 from functools import partial
 import base64
 
-import lib.util as util
-from lib.hash import Base58, hash160, double_sha256, hash_to_str, HASHX_LEN
-from lib.script import ScriptPubKey, OpCodes
-import lib.tx as lib_tx
-from server.block_processor import BlockProcessor
-import server.daemon as daemon
-from server.session import ElectrumX, DashElectrumX
+import electrumx.lib.util as util
+from electrumx.lib.hash import Base58, hash160, double_sha256, hash_to_hex_str
+from electrumx.lib.hash import HASHX_LEN
+from electrumx.lib.script import ScriptPubKey, OpCodes
+import electrumx.lib.tx as lib_tx
+import electrumx.server.block_processor as block_proc
+import electrumx.server.daemon as daemon
+from electrumx.server.session import ElectrumX, DashElectrumX
 
 
 Block = namedtuple("Block", "raw header transactions")
@@ -68,7 +69,8 @@ class Coin(object):
     SESSIONCLS = ElectrumX
     DESERIALIZER = lib_tx.Deserializer
     DAEMON = daemon.Daemon
-    BLOCK_PROCESSOR = BlockProcessor
+    BLOCK_PROCESSOR = block_proc.BlockProcessor
+    MEMPOOL_HISTOGRAM_REFRESH_SECS = 500
     XPUB_VERBYTES = bytes('????', 'utf-8')
     XPRV_VERBYTES = bytes('????', 'utf-8')
     ENCODE_CHECK = Base58.encode_check
@@ -120,7 +122,7 @@ class Coin(object):
         Return the block less its unspendable coinbase.
         '''
         header = cls.block_header(block, 0)
-        header_hex_hash = hash_to_str(cls.header_hash(header))
+        header_hex_hash = hash_to_hex_str(cls.header_hash(header))
         if header_hex_hash != cls.GENESIS_HASH:
             raise CoinError('genesis block has hash {} expected {}'
                             .format(header_hex_hash, cls.GENESIS_HASH))
@@ -292,8 +294,8 @@ class Coin(object):
         return {
             'block_height': height,
             'version': version,
-            'prev_block_hash': hash_to_str(header[4:36]),
-            'merkle_root': hash_to_str(header[36:68]),
+            'prev_block_hash': hash_to_hex_str(header[4:36]),
+            'merkle_root': hash_to_hex_str(header[36:68]),
             'timestamp': timestamp,
             'bits': bits,
             'nonce': nonce,
@@ -329,11 +331,11 @@ class EquihashMixin(object):
         return {
             'block_height': height,
             'version': version,
-            'prev_block_hash': hash_to_str(header[4:36]),
-            'merkle_root': hash_to_str(header[36:68]),
+            'prev_block_hash': hash_to_hex_str(header[4:36]),
+            'merkle_root': hash_to_hex_str(header[36:68]),
             'timestamp': timestamp,
             'bits': bits,
-            'nonce': hash_to_str(header[108:140]),
+            'nonce': hash_to_hex_str(header[108:140]),
         }
 
     @classmethod
@@ -405,8 +407,17 @@ class Bitcoin(Coin):
 class BitcoinTestnet(BitcoinTestnetMixin, Coin):
     '''Bitcoin Testnet for Core bitcoind >= 0.13.1.'''
     NET = "testnet"
+    PEERS = [
+        'electrum.akinbo.org s t',
+        'he36kyperp3kbuxu.onion s t',
+        'testnet.hsmiths.com t53011 s53012',
+        'hsmithsxurybd7uh.onion t53011 s53012',
+        'testnetnode.arihanc.com s t',
+        'w3e2orjpiiv2qwem3dw66d7c4krink4nhttngkylglpqe5r22n6n5wid.onion s t',
+        'testnet.qtornado.com s t',
+    ]
 
-class BitcoinRegtest(BitcoinTestnetMixin):
+class BitcoinRegtest(BitcoinTestnet):
     NAME = "Bitcoin"
     NET = "regtest"
     GENESIS_HASH = ('0f9188f13cb7b2c71f2a335e3a4fc328'

@@ -10,7 +10,6 @@ daemon.'''
 
 import asyncio
 import json
-import logging
 import time
 from calendar import timegm
 from struct import pack
@@ -18,8 +17,10 @@ from time import strptime
 
 import aiohttp
 
-from lib.util import int_to_varint, hex_to_bytes
-from lib.hash import hex_str_to_hash
+from electrumx.lib.util import int_to_varint, hex_to_bytes, class_logger, \
+    unpack_uint16_from
+from electrumx.lib.hash import hex_str_to_hash, hash_to_hex_str
+from electrumx.lib.tx import DeserializerDecred
 from aiorpcx import JSONRPC
 
 
@@ -37,25 +38,16 @@ class Daemon(object):
         '''Raised when the daemon returns an error in its results.'''
 
     def __init__(self, env):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = class_logger(__name__, self.__class__.__name__)
         self.coin = env.coin
         self.set_urls(env.coin.daemon_urls(env.daemon_url))
         self._height = None
-        self._mempool_hashes = set()
-        self.mempool_refresh_event = asyncio.Event()
         # Limit concurrent RPC calls to this number.
         # See DEFAULT_HTTP_WORKQUEUE in bitcoind, which is typically 16
         self.workqueue_semaphore = asyncio.Semaphore(value=10)
         self.down = False
         self.last_error_time = 0
         self.req_id = 0
-        # assignment of asyncio.TimeoutError are essentially ignored
-        if aiohttp.__version__.startswith('1.'):
-            self.ClientHttpProcessingError = aiohttp.ClientHttpProcessingError
-            self.ClientPayloadError = asyncio.TimeoutError
-        else:
-            self.ClientHttpProcessingError = asyncio.TimeoutError
-            self.ClientPayloadError = aiohttp.ClientPayloadError
         self._available_rpcs = {}  # caches results for _is_rpc_available()
 
     def next_req_id(self):
@@ -141,9 +133,7 @@ class Daemon(object):
                 log_error('timeout error.')
             except aiohttp.ServerDisconnectedError:
                 log_error('disconnected.')
-            except self.ClientHttpProcessingError:
-                log_error('HTTP error.')
-            except self.ClientPayloadError:
+            except aiohttp.ClientPayloadError:
                 log_error('payload encoding error.')
             except aiohttp.ClientConnectionError:
                 log_error('connection problem - is your daemon running?')
@@ -264,14 +254,15 @@ class Daemon(object):
 
     async def getrawtransaction(self, hex_hash, verbose=False):
         '''Return the serialized raw transaction with the given hash.'''
+        # Cast to int because some coin daemons are old and require it
         return await self._send_single('getrawtransaction',
-                                       (hex_hash, verbose))
+                                       (hex_hash, int(verbose)))
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
 
         Replaces errors with None by default.'''
-        params_iterable = ((hex_hash, False) for hex_hash in hex_hashes)
+        params_iterable = ((hex_hash, 0) for hex_hash in hex_hashes)
         txs = await self._send_vector('getrawtransaction', params_iterable,
                                       replace_errs=replace_errs)
         # Convert hex strings to bytes
@@ -281,17 +272,10 @@ class Daemon(object):
         '''Broadcast a transaction to the network.'''
         return await self._send_single('sendrawtransaction', params)
 
-    async def height(self, mempool=False):
+    async def height(self):
         '''Query the daemon for its current height.'''
         self._height = await self._send_single('getblockcount')
-        if mempool:
-            self._mempool_hashes = set(await self.mempool_hashes())
-            self.mempool_refresh_event.set()
         return self._height
-
-    def cached_mempool_hashes(self):
-        '''Return the cached mempool hashes.'''
-        return self._mempool_hashes
 
     def cached_height(self):
         '''Return the cached daemon height.
@@ -383,3 +367,87 @@ class LegacyRPCDaemon(Daemon):
         if isinstance(t, int):
             return t
         return timegm(strptime(t, "%Y-%m-%d %H:%M:%S %Z"))
+
+
+class DecredDaemon(Daemon):
+    async def raw_blocks(self, hex_hashes):
+        '''Return the raw binary blocks with the given hex hashes.'''
+
+        params_iterable = ((h, False) for h in hex_hashes)
+        blocks = await self._send_vector('getblock', params_iterable)
+
+        raw_blocks = []
+        valid_tx_tree = {}
+        for block in blocks:
+            # Convert to bytes from hex
+            raw_block = hex_to_bytes(block)
+            raw_blocks.append(raw_block)
+            # Check if previous block is valid
+            prev = self.prev_hex_hash(raw_block)
+            votebits = unpack_uint16_from(raw_block[100:102])[0]
+            valid_tx_tree[prev] = self.is_valid_tx_tree(votebits)
+
+        processed_raw_blocks = []
+        for hash, raw_block in zip(hex_hashes, raw_blocks):
+            if hash in valid_tx_tree:
+                is_valid = valid_tx_tree[hash]
+            else:
+                # Do something complicated to figure out if this block is valid
+                header = await self._send_single('getblockheader', (hash, ))
+                if 'nextblockhash' not in header:
+                    raise DaemonError(f'Could not find next block for {hash}')
+                next_hash = header['nextblockhash']
+                next_header = await self._send_single('getblockheader',
+                                                      (next_hash, ))
+                is_valid = self.is_valid_tx_tree(next_header['votebits'])
+
+            if is_valid:
+                processed_raw_blocks.append(raw_block)
+            else:
+                # If this block is invalid remove the normal transactions
+                self.logger.info(f'block {hash} is invalidated')
+                processed_raw_blocks.append(self.strip_tx_tree(raw_block))
+
+        return processed_raw_blocks
+
+    @staticmethod
+    def prev_hex_hash(raw_block):
+        return hash_to_hex_str(raw_block[4:36])
+
+    @staticmethod
+    def is_valid_tx_tree(votebits):
+        # Check if previous block was invalidated.
+        return bool(votebits & (1 << 0) != 0)
+
+    def strip_tx_tree(self, raw_block):
+        c = self.coin
+        assert issubclass(c.DESERIALIZER, DeserializerDecred)
+        d = c.DESERIALIZER(raw_block, start=c.BASIC_HEADER_SIZE)
+        d.read_tx_tree()  # Skip normal transactions
+        # Create a fake block without any normal transactions
+        return raw_block[:c.BASIC_HEADER_SIZE] + b'\x00' + raw_block[d.cursor:]
+
+    async def height(self):
+        height = await super().height()
+        if height > 0:
+            # Lie about the daemon height as the current tip can be invalidated
+            height -= 1
+            self._height = height
+        return height
+
+    async def mempool_hashes(self):
+        mempool = await super().mempool_hashes()
+        # Add current tip transactions to the 'fake' mempool.
+        real_height = await self._send_single('getblockcount')
+        tip_hash = await self._send_single('getblockhash', (real_height,))
+        tip = await self.deserialised_block(tip_hash)
+        # Add normal transactions except coinbase
+        mempool += tip['tx'][1:]
+        # Add stake transactions if applicable
+        mempool += tip.get('stx', [])
+        return mempool
+
+    def client_session(self):
+        # FIXME allow self signed certificates
+        connector = aiohttp.TCPConnector(verify_ssl=False)
+        return aiohttp.ClientSession(connector=connector)

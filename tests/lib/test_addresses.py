@@ -26,21 +26,20 @@
 
 import pytest
 
-from lib.coins import Litecoin, Bitcoin, Zcash
-from lib.hash import Base58
+import electrumx.lib.coins as coins
 
 addresses = [
-    (Bitcoin, "13xDKJbjh4acmLpNVr6Lc9hFcXRr9fyt4x",
+    (coins.Bitcoin, "13xDKJbjh4acmLpNVr6Lc9hFcXRr9fyt4x",
      "206168f5322583ff37f8e55665a4789ae8963532", "b8cb80b26e8932f5b12a7e"),
-    (Bitcoin, "3GxRZWkJufR5XA8hnNJgQ2gkASSheoBcmW",
+    (coins.Bitcoin, "3GxRZWkJufR5XA8hnNJgQ2gkASSheoBcmW",
      "a773db925b09add367dcc253c1f9bbc1d11ec6fd", "062d8515e50cb92b8a3a73"),
-    (Litecoin, "LNBAaWuZmipg29WXfz5dtAm1pjo8FEH8yg",
+    (coins.Litecoin, "LNBAaWuZmipg29WXfz5dtAm1pjo8FEH8yg",
      "206168f5322583ff37f8e55665a4789ae8963532", "b8cb80b26e8932f5b12a7e"),
-    (Litecoin, "MPAZsQAGrnGWKfQbtFJ2Dfw9V939e7D3E2",
+    (coins.Litecoin, "MPAZsQAGrnGWKfQbtFJ2Dfw9V939e7D3E2",
      "a773db925b09add367dcc253c1f9bbc1d11ec6fd", "062d8515e50cb92b8a3a73"),
-    (Zcash, "t1LppKe1sfPNDMysGSGuTjxoAsBcvvSYv5j",
+    (coins.Zcash, "t1LppKe1sfPNDMysGSGuTjxoAsBcvvSYv5j",
      "206168f5322583ff37f8e55665a4789ae8963532", "b8cb80b26e8932f5b12a7e"),
-    (Zcash, "t3Zq2ZrASszCg7oBbio7oXqnfR6dnSWqo76",
+    (coins.Zcash, "t3Zq2ZrASszCg7oBbio7oXqnfR6dnSWqo76",
      "a773db925b09add367dcc253c1f9bbc1d11ec6fd", "062d8515e50cb92b8a3a73"),
 ]
 
