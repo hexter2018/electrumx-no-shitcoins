@@ -70,6 +70,9 @@ class Coin(object):
     DESERIALIZER = lib_tx.Deserializer
     DAEMON = daemon.Daemon
     BLOCK_PROCESSOR = block_proc.BlockProcessor
+    HEADER_VALUES = ('version', 'prev_block_hash', 'merkle_root', 'timestamp',
+                     'bits', 'nonce')
+    HEADER_UNPACK = struct.Struct('< I 32s 32s I I I').unpack_from
     MEMPOOL_HISTOGRAM_REFRESH_SECS = 500
     XPUB_VERBYTES = bytes('????', 'utf-8')
     XPRV_VERBYTES = bytes('????', 'utf-8')
@@ -110,10 +113,6 @@ class Coin(object):
         if not url.startswith('http://') and not url.startswith('https://'):
             url = 'http://' + url
         return url + '/'
-
-    @classmethod
-    def daemon_urls(cls, urls):
-        return [cls.sanitize_url(url) for url in urls.split(',')]
 
     @classmethod
     def genesis_block(cls, block):
@@ -212,6 +211,14 @@ class Coin(object):
         return ScriptPubKey.P2PK_script(pubkey)
 
     @classmethod
+    def hash160_to_P2PKH_script(cls, hash160):
+        return ScriptPubKey.P2PKH_script(hash160)
+
+    @classmethod
+    def hash160_to_P2PKH_hashX(cls, hash160):
+        return cls.hashX_from_script(cls.hash160_to_P2PKH_script(hash160))
+
+    @classmethod
     def pay_to_address_script(cls, address):
         '''Return a pubkey script that pays to a pubkey hash.
 
@@ -223,12 +230,12 @@ class Coin(object):
         verbyte = -1
         verlen = len(raw) - 20
         if verlen > 0:
-            verbyte, hash_bytes = raw[:verlen], raw[verlen:]
+            verbyte, hash160 = raw[:verlen], raw[verlen:]
 
         if verbyte == cls.P2PKH_VERBYTE:
-            return ScriptPubKey.P2PKH_script(hash_bytes)
+            return cls.hash160_to_P2PKH_script(hash160)
         if verbyte in cls.P2SH_VERBYTES:
-            return ScriptPubKey.P2SH_script(hash_bytes)
+            return ScriptPubKey.P2SH_script(hash160)
 
         raise CoinError('invalid address: {}'.format(address))
 
@@ -288,18 +295,13 @@ class Coin(object):
 
     @classmethod
     def electrum_header(cls, header, height):
-        version, = struct.unpack('<I', header[:4])
-        timestamp, bits, nonce = struct.unpack('<III', header[68:80])
-
-        return {
-            'block_height': height,
-            'version': version,
-            'prev_block_hash': hash_to_hex_str(header[4:36]),
-            'merkle_root': hash_to_hex_str(header[36:68]),
-            'timestamp': timestamp,
-            'bits': bits,
-            'nonce': nonce,
-        }
+        h = dict(zip(cls.HEADER_VALUES, cls.HEADER_UNPACK(header)))
+        # Add the height that is not present in the header itself
+        h['block_height'] = height
+        # Convert bytes to str
+        h['prev_block_hash'] = hash_to_hex_str(h['prev_block_hash'])
+        h['merkle_root'] = hash_to_hex_str(h['merkle_root'])
+        return h
 
 
 class AuxPowMixin(object):
@@ -322,21 +324,21 @@ class EquihashMixin(object):
     STATIC_BLOCK_HEADERS = False
     BASIC_HEADER_SIZE = 140  # Excluding Equihash solution
     DESERIALIZER = lib_tx.DeserializerEquihash
+    HEADER_VALUES = ('version', 'prev_block_hash', 'merkle_root', 'reserved',
+                     'timestamp', 'bits', 'nonce')
+    HEADER_UNPACK = struct.Struct('< I 32s 32s 32s I I 32s').unpack_from
 
     @classmethod
     def electrum_header(cls, header, height):
-        version, = struct.unpack('<I', header[:4])
-        timestamp, bits = struct.unpack('<II', header[100:108])
-
-        return {
-            'block_height': height,
-            'version': version,
-            'prev_block_hash': hash_to_hex_str(header[4:36]),
-            'merkle_root': hash_to_hex_str(header[36:68]),
-            'timestamp': timestamp,
-            'bits': bits,
-            'nonce': hash_to_hex_str(header[108:140]),
-        }
+        h = dict(zip(cls.HEADER_VALUES, cls.HEADER_UNPACK(header)))
+        # Add the height that is not present in the header itself
+        h['block_height'] = height
+        # Convert bytes to str
+        h['prev_block_hash'] = hash_to_hex_str(h['prev_block_hash'])
+        h['merkle_root'] = hash_to_hex_str(h['merkle_root'])
+        h['reserved'] = hash_to_hex_str(h['reserved'])
+        h['nonce'] = hash_to_hex_str(h['nonce'])
+        return h
 
     @classmethod
     def block_header(cls, block, height):
