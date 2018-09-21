@@ -187,8 +187,10 @@ class MemPool(object):
 
             # Save the in_pairs, compute the fee and accept the TX
             tx.in_pairs = tuple(in_pairs)
-            tx.fee = (sum(v for hashX, v in tx.in_pairs) -
-                      sum(v for hashX, v in tx.out_pairs))
+            # Avoid negative fees if dealing with generation-like transactions
+            # because some in_parts would be missing
+            tx.fee = max(0, (sum(v for _, v in tx.in_pairs) -
+                             sum(v for _, v in tx.out_pairs)))
             txs[hash] = tx
 
             for hashX, value in itertools.chain(tx.in_pairs, tx.out_pairs):
@@ -271,8 +273,10 @@ class MemPool(object):
                     continue
                 tx, tx_size = deserializer(raw_tx).read_tx_and_vsize()
                 # Convert the inputs and outputs into (hashX, value) pairs
+                # Drop generation-like inputs from MemPoolTx.prevouts
                 txin_pairs = tuple((txin.prev_hash, txin.prev_idx)
-                                   for txin in tx.inputs)
+                                   for txin in tx.inputs
+                                   if not txin.is_generation())
                 txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
                                     for txout in tx.outputs)
                 txs[hash] = MemPoolTx(txin_pairs, None, txout_pairs,
@@ -285,7 +289,8 @@ class MemPool(object):
         # Determine all prevouts not in the mempool, and fetch the
         # UTXO information from the database.  Failed prevout lookups
         # return None - concurrent database updates happen - which is
-        # relied upon by _accept_transactions
+        # relied upon by _accept_transactions. Ignore prevouts that are
+        # generation-like.
         prevouts = tuple(prevout for tx in tx_map.values()
                          for prevout in tx.prevouts
                          if prevout[0] not in all_hashes)
@@ -300,7 +305,7 @@ class MemPool(object):
 
     async def keep_synchronized(self, synchronized_event):
         '''Keep the mempool synchronized with the daemon.'''
-        async with TaskGroup(wait=any) as group:
+        async with TaskGroup() as group:
             await group.spawn(self._refresh_hashes(synchronized_event))
             await group.spawn(self._refresh_histogram(synchronized_event))
             await group.spawn(self._logging(synchronized_event))

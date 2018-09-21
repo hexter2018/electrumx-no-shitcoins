@@ -240,10 +240,10 @@ class BlockProcessor(object):
         async def get_raw_blocks(last_height, hex_hashes):
             heights = range(last_height, last_height - len(hex_hashes), -1)
             try:
-                blocks = [self.read_raw_block(height) for height in heights]
+                blocks = [self.db.read_raw_block(height) for height in heights]
                 self.logger.info(f'read {len(blocks)} blocks from disk')
                 return blocks
-            except Exception:
+            except FileNotFoundError:
                 return await self.daemon.raw_blocks(hex_hashes)
 
         def flush_backup():
@@ -411,11 +411,12 @@ class BlockProcessor(object):
             tx_numb = s_pack('<I', tx_num)
 
             # Spend the inputs
-            if not tx.is_generation:
-                for txin in tx.inputs:
-                    cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
-                    undo_info_append(cache_value)
-                    append_hashX(cache_value[:-12])
+            for txin in tx.inputs:
+                if txin.is_generation():
+                    continue
+                cache_value = spend_utxo(txin.prev_hash, txin.prev_idx)
+                undo_info_append(cache_value)
+                append_hashX(cache_value[:-12])
 
             # Add the new UTXOs
             for idx, txout in enumerate(tx.outputs):
@@ -490,13 +491,14 @@ class BlockProcessor(object):
                     touched.add(cache_value[:-12])
 
             # Restore the inputs
-            if not tx.is_generation:
-                for txin in reversed(tx.inputs):
-                    n -= undo_entry_len
-                    undo_item = undo_info[n:n + undo_entry_len]
-                    put_utxo(txin.prev_hash + s_pack('<H', txin.prev_idx),
-                             undo_item)
-                    touched.add(undo_item[:-12])
+            for txin in reversed(tx.inputs):
+                if txin.is_generation():
+                    continue
+                n -= undo_entry_len
+                undo_item = undo_info[n:n + undo_entry_len]
+                put_utxo(txin.prev_hash + s_pack('<H', txin.prev_idx),
+                         undo_item)
+                touched.add(undo_item[:-12])
 
         assert n == 0
         self.tx_count -= len(txs)
@@ -670,13 +672,3 @@ class BlockProcessor(object):
             self.blocks_event.set()
             return True
         return False
-
-
-class DecredBlockProcessor(BlockProcessor):
-    async def calc_reorg_range(self, count):
-        start, count = await super().calc_reorg_range(count)
-        if start > 0:
-            # A reorg in Decred can invalidate the previous block
-            start -= 1
-            count += 1
-        return start, count
